@@ -14,7 +14,7 @@ DEFAULT_MODELS = {
     "anthropic": "claude-haiku-4-5-20251001",
     "gemini":    "gemini-2.0-flash",
     "ollama":    "llama3.2",
-    "unsloth":   "unsloth/Qwen3-14B-bnb-4bit",
+    "unsloth":   "unsloth/gemma-4-9b-it-bnb-4bit",
 }
 
 
@@ -136,11 +136,24 @@ class LLMClient:
 
         if tokenizer.chat_template is not None:
             messages = [{"role": "user", "content": prompt}]
-            text = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
+            # FIX 1: enable_thinking=False — wajib untuk Gemma 4 IT dan Qwen3.
+            # Tanpa ini model masuk ke mode chain-of-thought yang menghabiskan
+            # token budget dan menyebabkan output JSON terpotong atau kosong
+            # (NoneType subscriptable error di downstream).
+            try:
+                text = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
+                )
+            except TypeError:
+                # Fallback: tokenizer lama tidak mengenal enable_thinking
+                text = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
         else:
             text = prompt
 
@@ -150,12 +163,22 @@ class LLMClient:
             outputs = model.generate(
                 **inputs,
                 max_new_tokens=1024,
-                temperature=0.1,
-                do_sample=True,
+                # FIX 2: temperature=0.1 + do_sample=True menyebabkan
+                # UserWarning pada beberapa versi transformers yang kemudian
+                # mengembalikan None. Gunakan greedy decoding (do_sample=False)
+                # untuk output JSON yang lebih deterministik dan konsisten.
+                do_sample=False,
                 pad_token_id=tokenizer.eos_token_id,
                 use_cache=True,
             )
 
         new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
         result = tokenizer.decode(new_tokens, skip_special_tokens=True)
-        return result.strip()
+
+        # FIX 3: Guard string kosong — trigger retry via exception
+        # daripada mengembalikan None yang menyebabkan 'NoneType' subscriptable.
+        result = result.strip()
+        if not result:
+            raise ValueError("Model returned an empty response. Check VRAM or try a smaller model.")
+
+        return result
