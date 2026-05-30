@@ -68,21 +68,27 @@ class HKGConfig:
                               gemini, ollama, unsloth.
         model               : Model name or alias. If None, uses the provider default
                               defined in DEFAULT_MODELS inside llm_client.py.
+        max_new_tokens      : Maximum number of tokens to generate per LLM call.
+                              Default 256 is sufficient for JSON output on short datasets.
+                              Increase if you see JSON parse errors due to truncation.
+        context_max_chars   : Maximum characters of context passed to the LLM prompt.
+                              Default 500 covers most short passages. Increase for
+                              longer documents.
         data_path           : Path to the semicolon-separated CSV dataset.
         output_dir          : Directory where graph outputs (JSON, CSV, stats) are saved.
         checkpoint_path     : Path to the checkpoint JSON file used for resuming
                               interrupted pipeline runs.
         batch_size          : Number of rows processed per batch before saving checkpoint.
-                              Recommended: 5 for local Unsloth inference, 10 for API providers.
         max_retries         : Number of retry attempts per row on LLM error or JSON parse failure.
         retry_delay         : Base delay in seconds between retry attempts (multiplied by attempt number).
         sleep_between_batches: Seconds to sleep between batches. Set to 0 for local inference.
-                               For API providers, use 0.5-1.0 to avoid rate limits.
         similarity_threshold: Cosine similarity threshold for merging duplicate concept nodes.
                               Not yet implemented; reserved for future fuzzy deduplication.
     """
     provider: str = "groq"
     model: str = None
+    max_new_tokens: int = 256
+    context_max_chars: int = 500
 
     data_path: str = "data/Knowledge_Base_Update.csv"
     output_dir: str = "output/graph"
@@ -171,41 +177,21 @@ Extraction rules:
 class AutoHKG:
     """
     Main pipeline class for automated hierarchical knowledge graph construction.
-
-    Instantiate with an HKGConfig object, then call .run() to process the dataset
-    and export the resulting graph.
-
-    The pipeline is designed to be resumable: progress is saved to a checkpoint file
-    after each batch. If the run is interrupted, re-running with the same config will
-    skip already-processed rows and continue from where it left off.
-
-    Example:
-        cfg = HKGConfig(provider="groq", data_path="data/questions.csv", batch_size=10)
-        pipeline = AutoHKG(cfg)
-        pipeline.run()
     """
 
     def __init__(self, config: HKGConfig):
         self.cfg = config
         self.client = LLMClient(
             provider=config.provider,
-            model=config.model
+            model=config.model,
+            max_new_tokens=config.max_new_tokens,
         )
         self.builder = GraphBuilder()
         self.checkpoint = self._load_checkpoint()
         Path(config.output_dir).mkdir(parents=True, exist_ok=True)
         Path("output/logs").mkdir(parents=True, exist_ok=True)
 
-    # -------------------------------------------------------------------------
-    # Checkpoint management
-    # -------------------------------------------------------------------------
-
     def _load_checkpoint(self) -> dict:
-        """
-        Load the checkpoint file if it exists.
-        Returns a dict with 'processed' (int) and 'failed_ids' (list).
-        If no checkpoint exists, returns a fresh state starting at row 0.
-        """
         p = Path(self.cfg.checkpoint_path)
         if p.exists():
             with open(p) as f:
@@ -218,34 +204,14 @@ class AutoHKG:
         with open(self.cfg.checkpoint_path, "w") as f:
             json.dump(self.checkpoint, f, indent=2)
 
-    # -------------------------------------------------------------------------
-    # Row identity
-    # -------------------------------------------------------------------------
-
     @staticmethod
     def _row_id(row: pd.Series) -> str:
-        """
-        Generate a short deterministic ID for a dataset row based on its question
-        text and Bloom level. Used to track failed extractions in the checkpoint.
-        """
         raw = f"{row['Pertanyaan']}|{row['Level Kognitif']}"
         return hashlib.md5(raw.encode()).hexdigest()[:10]
 
-    # -------------------------------------------------------------------------
-    # Single-row extraction
-    # -------------------------------------------------------------------------
-
     def _extract_one(self, row: pd.Series) -> Optional[dict]:
-        """
-        Run LLM extraction for a single dataset row with retry logic.
-
-        The context is truncated to 1500 characters to prevent exceeding the
-        model's effective prompt length while retaining the most relevant content.
-        On each attempt, the raw LLM output is parsed as JSON and validated against
-        the Auto-HKG schema. If all retries fail, returns None and logs the failure.
-        """
         prompt = EXTRACTION_PROMPT.format(
-            context=row["Konteks"][:1500],
+            context=row["Konteks"][:self.cfg.context_max_chars],
             question=row["Pertanyaan"],
             bloom_level=row["Level Kognitif"]
         )
@@ -254,13 +220,9 @@ class AutoHKG:
             try:
                 raw = self.client.complete(prompt)
 
-                # FIX: Guard None — model kadang mengembalikan None
-                # (bukan string kosong), menyebabkan 'NoneType' subscriptable
-                # saat .strip() dipanggil. Raise agar masuk blok retry.
                 if raw is None:
                     raise ValueError("LLM returned None instead of a string.")
 
-                # Strip markdown code fences if the model includes them despite instructions
                 cleaned = raw.strip()
                 if cleaned.startswith("```"):
                     cleaned = cleaned.split("```")[1]
@@ -268,9 +230,6 @@ class AutoHKG:
                         cleaned = cleaned[4:]
                     cleaned = cleaned.strip()
 
-                # FIX: Beberapa model (Gemma, Qwen) menambahkan teks preamble
-                # di luar JSON (e.g. "Here is the result:\n{...}").
-                # Cari kurung kurawal pertama/terakhir untuk ekstrak JSON murni.
                 if not cleaned.startswith("{"):
                     start = cleaned.find("{")
                     end   = cleaned.rfind("}") + 1
@@ -295,24 +254,8 @@ class AutoHKG:
 
         return None
 
-    # -------------------------------------------------------------------------
-    # Main run loop
-    # -------------------------------------------------------------------------
-
     def run(self):
-        """
-        Execute the full pipeline over the dataset.
-
-        Processing order:
-            1. Load CSV and validate column names.
-            2. Skip already-processed rows using the checkpoint offset.
-            3. For each row, call _extract_one and pass results to GraphBuilder.
-            4. Save checkpoint after each batch.
-            5. After all rows are processed, export graph outputs.
-        """
         df = pd.read_csv(self.cfg.data_path, sep=";")
-
-        # Normalize column names regardless of leading/trailing whitespace in CSV
         df.columns = [c.strip() for c in df.columns]
 
         expected = {"Konteks", "Pertanyaan", "Level Kognitif"}
@@ -356,34 +299,14 @@ class AutoHKG:
         log.info(f"Pipeline complete. Total processed: {total} | Failed: {len(failed)}")
         self._save_outputs()
 
-    # -------------------------------------------------------------------------
-    # Output export
-    # -------------------------------------------------------------------------
-
     def _save_outputs(self):
-        """
-        Export the constructed knowledge graph in three formats:
-
-        1. knowledge_graph.json : Full graph in NetworkX node-link format.
-                                  Suitable for programmatic loading and downstream
-                                  CG-IR retrieval and reasoning tasks.
-
-        2. nodes.csv / edges.csv: Flat tabular exports for manual inspection,
-                                  visualization tools (Gephi, Cytoscape), or
-                                  spreadsheet review.
-
-        3. stats.json           : Summary statistics including node counts by type
-                                  and total edge count.
-        """
         out = Path(self.cfg.output_dir)
         G = self.builder.get_graph()
 
-        # 1. JSON (node-link format)
         graph_data = nx.node_link_data(G)
         with open(out / "knowledge_graph.json", "w", encoding="utf-8") as f:
             json.dump(graph_data, f, ensure_ascii=False, indent=2)
 
-        # 2. Tabular exports
         nodes_df = pd.DataFrame([{"id": n, **G.nodes[n]} for n in G.nodes])
         edges_df = pd.DataFrame([
             {"source": u, "target": v, **d} for u, v, d in G.edges(data=True)
@@ -391,7 +314,6 @@ class AutoHKG:
         nodes_df.to_csv(out / "nodes.csv", index=False)
         edges_df.to_csv(out / "edges.csv", index=False)
 
-        # 3. Summary stats
         def count_type(t):
             return len([n for n, d in G.nodes(data=True) if d.get("type") == t])
 
@@ -431,6 +353,14 @@ if __name__ == "__main__":
         help="Model name or alias. Uses provider default if not specified."
     )
     parser.add_argument(
+        "--max-new-tokens", type=int, default=256,
+        help="Maximum tokens to generate per LLM call (default: 256)."
+    )
+    parser.add_argument(
+        "--context-max-chars", type=int, default=500,
+        help="Maximum characters of context passed to prompt (default: 500)."
+    )
+    parser.add_argument(
         "--data", default="data/Knowledge_Base_Update.csv",
         help="Path to the semicolon-separated CSV dataset."
     )
@@ -447,6 +377,8 @@ if __name__ == "__main__":
     cfg = HKGConfig(
         provider=args.provider,
         model=args.model,
+        max_new_tokens=args.max_new_tokens,
+        context_max_chars=args.context_max_chars,
         data_path=args.data,
         batch_size=args.batch_size,
         sleep_between_batches=args.sleep,
