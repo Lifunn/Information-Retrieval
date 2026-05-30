@@ -77,7 +77,7 @@ class LLMClient:
         print(f"[Unsloth] max_seq_length: {max_seq_length}")
         print("[Unsloth] Loading model weights. First run may take 3-10 minutes...")
 
-        model, tokenizer = FastLanguageModel.from_pretrained(
+        model, processor = FastLanguageModel.from_pretrained(
             model_name=model_id,
             max_seq_length=max_seq_length,
             dtype=dtype,
@@ -86,7 +86,10 @@ class LLMClient:
         FastLanguageModel.for_inference(model)
 
         print("[Unsloth] Model loaded successfully.")
-        return (model, tokenizer)
+        # Deteksi apakah ini multimodal processor (Gemma 4) atau tokenizer biasa
+        self._is_multimodal = hasattr(processor, 'apply_chat_template') and hasattr(processor, 'decode')
+        print(f"[Unsloth] Processor type: {'Multimodal Processor' if self._is_multimodal else 'Tokenizer'}")
+        return (model, processor)
 
     def complete(self, prompt: str) -> str:
         if self.provider in ("groq", "openai"):
@@ -132,52 +135,31 @@ class LLMClient:
             return self._complete_unsloth(prompt)
 
     def _complete_unsloth(self, prompt: str) -> str:
-        model, tokenizer = self._client
+        model, processor = self._client
 
-        if tokenizer.chat_template is not None:
-            messages = [{"role": "user", "content": prompt}]
-            # FIX 1: enable_thinking=False — wajib untuk Gemma 4 IT dan Qwen3.
-            # Tanpa ini model masuk ke mode chain-of-thought yang menghabiskan
-            # token budget dan menyebabkan output JSON terpotong atau kosong
-            # (NoneType subscriptable error di downstream).
-            try:
-                text = tokenizer.apply_chat_template(
-                    messages,
-                    tokenize=False,
-                    add_generation_prompt=True,
-                    enable_thinking=False,
-                )
-            except TypeError:
-                # Fallback: tokenizer lama tidak mengenal enable_thinking
-                text = tokenizer.apply_chat_template(
-                    messages,
-                    tokenize=False,
-                    add_generation_prompt=True,
-                )
-        else:
-            text = prompt
+        # Gemma 4 pakai Processor multimodal — format input berbeda dari tokenizer biasa.
+        # Content harus dalam format list of dicts dengan "type" dan "text".
+        messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
 
-        inputs = tokenizer(text, return_tensors="pt").to("cuda")
+        inputs = processor.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_tensors="pt",
+            return_dict=True,
+        ).to("cuda")
 
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
                 max_new_tokens=1024,
-                # FIX 2: temperature=0.1 + do_sample=True menyebabkan
-                # UserWarning pada beberapa versi transformers yang kemudian
-                # mengembalikan None. Gunakan greedy decoding (do_sample=False)
-                # untuk output JSON yang lebih deterministik dan konsisten.
                 do_sample=False,
-                pad_token_id=tokenizer.eos_token_id,
-                use_cache=True,
             )
 
+        # Decode hanya token baru (potong bagian prompt)
         new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
-        result = tokenizer.decode(new_tokens, skip_special_tokens=True)
+        result = processor.decode(new_tokens, skip_special_tokens=True).strip()
 
-        # FIX 3: Guard string kosong — trigger retry via exception
-        # daripada mengembalikan None yang menyebabkan 'NoneType' subscriptable.
-        result = result.strip()
         if not result:
             raise ValueError("Model returned an empty response. Check VRAM or try a smaller model.")
 
