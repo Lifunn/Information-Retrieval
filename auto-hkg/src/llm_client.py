@@ -19,9 +19,10 @@ DEFAULT_MODELS = {
 
 
 class LLMClient:
-    def __init__(self, provider: str = "groq", model: str = None):
+    def __init__(self, provider: str = "groq", model: str = None, max_new_tokens: int = 256):
         self.provider = provider.lower()
         self.model = model or DEFAULT_MODELS[self.provider]
+        self.max_new_tokens = max_new_tokens
         self._client = self._init_client()
 
     def _init_client(self):
@@ -142,13 +143,12 @@ class LLMClient:
             return_tensors="pt",
             return_dict=True,
         )
-        # Pindahkan semua tensor ke GPU secara eksplisit
         inputs = {k: v.to("cuda") if hasattr(v, "to") else v for k, v in inputs.items()}
 
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
-                max_new_tokens=256,
+                max_new_tokens=self.max_new_tokens,
                 do_sample=False,
             )
 
