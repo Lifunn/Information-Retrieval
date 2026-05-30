@@ -133,8 +133,6 @@ class LLMClient:
     def _complete_unsloth(self, prompt: str) -> str:
         model, processor = self._client
 
-        # Gemma 4 pakai Processor multimodal — input harus berupa
-        # list of dicts dengan key "type" dan "text", bukan string biasa.
         messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
 
         inputs = processor.apply_chat_template(
@@ -143,7 +141,9 @@ class LLMClient:
             tokenize=True,
             return_tensors="pt",
             return_dict=True,
-        ).to("cuda")
+        )
+        # Pindahkan semua tensor ke GPU secara eksplisit
+        inputs = {k: v.to("cuda") if hasattr(v, "to") else v for k, v in inputs.items()}
 
         with torch.no_grad():
             outputs = model.generate(
@@ -152,7 +152,6 @@ class LLMClient:
                 do_sample=False,
             )
 
-        # Decode hanya token baru, potong bagian prompt
         new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
         result = processor.decode(new_tokens, skip_special_tokens=True).strip()
 
