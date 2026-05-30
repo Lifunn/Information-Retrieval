@@ -14,7 +14,7 @@ DEFAULT_MODELS = {
     "anthropic": "claude-haiku-4-5-20251001",
     "gemini":    "gemini-2.0-flash",
     "ollama":    "llama3.2",
-    "unsloth":   "unsloth/gemma-4-9b-it-bnb-4bit",
+    "unsloth":   "unsloth/gemma-4-E4B-it",
 }
 
 
@@ -65,7 +65,6 @@ class LLMClient:
             )
 
         model_id = self.model
-
         bf16_supported = torch.cuda.is_bf16_supported()
         dtype = torch.bfloat16 if bf16_supported else torch.float16
         use_4bit = "bnb-4bit" in model_id
@@ -86,9 +85,6 @@ class LLMClient:
         FastLanguageModel.for_inference(model)
 
         print("[Unsloth] Model loaded successfully.")
-        # Deteksi apakah ini multimodal processor (Gemma 4) atau tokenizer biasa
-        self._is_multimodal = hasattr(processor, 'apply_chat_template') and hasattr(processor, 'decode')
-        print(f"[Unsloth] Processor type: {'Multimodal Processor' if self._is_multimodal else 'Tokenizer'}")
         return (model, processor)
 
     def complete(self, prompt: str) -> str:
@@ -137,8 +133,8 @@ class LLMClient:
     def _complete_unsloth(self, prompt: str) -> str:
         model, processor = self._client
 
-        # Gemma 4 pakai Processor multimodal — format input berbeda dari tokenizer biasa.
-        # Content harus dalam format list of dicts dengan "type" dan "text".
+        # Gemma 4 pakai Processor multimodal — input harus berupa
+        # list of dicts dengan key "type" dan "text", bukan string biasa.
         messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
 
         inputs = processor.apply_chat_template(
@@ -156,7 +152,7 @@ class LLMClient:
                 do_sample=False,
             )
 
-        # Decode hanya token baru (potong bagian prompt)
+        # Decode hanya token baru, potong bagian prompt
         new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
         result = processor.decode(new_tokens, skip_special_tokens=True).strip()
 
