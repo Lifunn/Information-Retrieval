@@ -254,6 +254,12 @@ class AutoHKG:
             try:
                 raw = self.client.complete(prompt)
 
+                # FIX: Guard None — model kadang mengembalikan None
+                # (bukan string kosong), menyebabkan 'NoneType' subscriptable
+                # saat .strip() dipanggil. Raise agar masuk blok retry.
+                if raw is None:
+                    raise ValueError("LLM returned None instead of a string.")
+
                 # Strip markdown code fences if the model includes them despite instructions
                 cleaned = raw.strip()
                 if cleaned.startswith("```"):
@@ -261,6 +267,15 @@ class AutoHKG:
                     if cleaned.startswith("json"):
                         cleaned = cleaned[4:]
                     cleaned = cleaned.strip()
+
+                # FIX: Beberapa model (Gemma, Qwen) menambahkan teks preamble
+                # di luar JSON (e.g. "Here is the result:\n{...}").
+                # Cari kurung kurawal pertama/terakhir untuk ekstrak JSON murni.
+                if not cleaned.startswith("{"):
+                    start = cleaned.find("{")
+                    end   = cleaned.rfind("}") + 1
+                    if start != -1 and end > start:
+                        cleaned = cleaned[start:end]
 
                 data = json.loads(cleaned)
                 validate_extraction(data)
