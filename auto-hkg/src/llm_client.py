@@ -68,7 +68,7 @@ class LLMClient:
         bf16_supported = torch.cuda.is_bf16_supported()
         dtype = torch.bfloat16 if bf16_supported else torch.float16
         use_4bit = "bnb-4bit" in model_id
-        max_seq_length = 4096 if bf16_supported else 2048
+        max_seq_length = 2048
 
         print(f"[Unsloth] Model         : {model_id}")
         print(f"[Unsloth] dtype         : {dtype}")
@@ -148,7 +148,7 @@ class LLMClient:
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
-                max_new_tokens=1024,
+                max_new_tokens=256,
                 do_sample=False,
             )
 
