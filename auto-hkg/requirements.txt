@@ -1,0 +1,26 @@
+# Auto-HKG — dependencies
+# Install semua: pip install -r requirements.txt
+
+# Core
+pandas>=2.0
+networkx>=3.2
+tqdm>=4.66
+matplotlib>=3.8
+
+# LLM providers — uncomment sesuai yang kamu pakai
+groq>=0.9                    # Groq API (recommended untuk non-lokal, gratis)
+# openai>=1.30               # OpenAI
+# anthropic>=0.28            # Anthropic Claude
+# google-generativeai>=0.7   # Google Gemini
+
+# Unsloth (lokal, T4) — install via perintah khusus di Colab:
+# pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+# Dependensi Unsloth (auto-terinstall, tapi ditulis eksplisit):
+# torch, transformers, peft, trl, accelerate, bitsandbytes, xformers
+
+# Graph visualization
+pyvis>=0.3.2            # interactive HTML graph
+
+# Notebook
+ipython>=8.0
+ipykernel>=6.0
