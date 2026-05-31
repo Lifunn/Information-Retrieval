@@ -35,7 +35,7 @@ import hashlib
 import pandas as pd
 import networkx as nx
 from pathlib import Path
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 from tqdm import tqdm
 
@@ -60,31 +60,6 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class HKGConfig:
-    """
-    Configuration dataclass for the Auto-HKG pipeline.
-
-    Attributes:
-        provider            : LLM provider to use. One of: openai, groq, anthropic,
-                              gemini, ollama, unsloth.
-        model               : Model name or alias. If None, uses the provider default
-                              defined in DEFAULT_MODELS inside llm_client.py.
-        max_new_tokens      : Maximum number of tokens to generate per LLM call.
-                              Default 256 is sufficient for JSON output on short datasets.
-                              Increase if you see JSON parse errors due to truncation.
-        context_max_chars   : Maximum characters of context passed to the LLM prompt.
-                              Default 500 covers most short passages. Increase for
-                              longer documents.
-        data_path           : Path to the semicolon-separated CSV dataset.
-        output_dir          : Directory where graph outputs (JSON, CSV, stats) are saved.
-        checkpoint_path     : Path to the checkpoint JSON file used for resuming
-                              interrupted pipeline runs.
-        batch_size          : Number of rows processed per batch before saving checkpoint.
-        max_retries         : Number of retry attempts per row on LLM error or JSON parse failure.
-        retry_delay         : Base delay in seconds between retry attempts (multiplied by attempt number).
-        sleep_between_batches: Seconds to sleep between batches. Set to 0 for local inference.
-        similarity_threshold: Cosine similarity threshold for merging duplicate concept nodes.
-                              Not yet implemented; reserved for future fuzzy deduplication.
-    """
     provider: str = "groq"
     model: str = None
     max_new_tokens: int = 256
@@ -96,8 +71,8 @@ class HKGConfig:
 
     batch_size: int = 10
     max_retries: int = 3
-    retry_delay: float = 2.0
-    sleep_between_batches: float = 1.0
+    retry_delay: float = 0.0
+    sleep_between_batches: float = 0.0
 
     similarity_threshold: float = 0.75
 
@@ -137,14 +112,56 @@ Rules:
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _extract_json(text: str) -> str:
+    """Ekstrak JSON pertama yang valid dari teks output model."""
+    text = text.strip()
+
+    # Strip markdown code fences
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
+
+    # Cari awal JSON
+    if not text.startswith("{"):
+        start = text.find("{")
+        if start == -1:
+            return text
+        text = text[start:]
+
+    # Ambil hanya JSON pertama yang matching (fix: extra data error)
+    depth = 0
+    for i, c in enumerate(text):
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[:i + 1]
+
+    return text
+
+
+def _clean_list_fields(data: dict) -> dict:
+    """Filter string kosong dari semua list fields (fix: prerequisites '' error)."""
+    for field in ["prerequisites", "successors", "concepts", "methods"]:
+        if field in data and isinstance(data[field], list):
+            data[field] = [
+                x for x in data[field]
+                if isinstance(x, str) and x.strip()
+            ]
+    return data
+
+
+# ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
 
 class AutoHKG:
-    """
-    Main pipeline class for automated hierarchical knowledge graph construction.
-    """
-
     def __init__(self, config: HKGConfig):
         self.cfg = config
         self.client = LLMClient(
@@ -187,22 +204,11 @@ class AutoHKG:
                 raw = self.client.complete(prompt)
 
                 if raw is None:
-                    raise ValueError("LLM returned None instead of a string.")
+                    raise ValueError("LLM returned None.")
 
-                cleaned = raw.strip()
-                if cleaned.startswith("```"):
-                    cleaned = cleaned.split("```")[1]
-                    if cleaned.startswith("json"):
-                        cleaned = cleaned[4:]
-                    cleaned = cleaned.strip()
-
-                if not cleaned.startswith("{"):
-                    start = cleaned.find("{")
-                    end   = cleaned.rfind("}") + 1
-                    if start != -1 and end > start:
-                        cleaned = cleaned[start:end]
-
+                cleaned = _extract_json(raw)
                 data = json.loads(cleaned)
+                data = _clean_list_fields(data)
                 validate_extraction(data)
                 data["_question"] = row["Pertanyaan"]
                 data["_row_id"] = self._row_id(row)
@@ -210,13 +216,13 @@ class AutoHKG:
 
             except json.JSONDecodeError as e:
                 log.warning(f"JSON parse error on attempt {attempt}/{self.cfg.max_retries}: {e}")
-                log.debug(f"Raw output was: {raw[:300]}")
             except SchemaError as e:
                 log.warning(f"Schema validation failed on attempt {attempt}/{self.cfg.max_retries}: {e}")
             except Exception as e:
                 log.warning(f"Unexpected error on attempt {attempt}/{self.cfg.max_retries}: {e}")
 
-            time.sleep(self.cfg.retry_delay * attempt)
+            if self.cfg.retry_delay > 0:
+                time.sleep(self.cfg.retry_delay * attempt)
 
         return None
 
@@ -227,7 +233,7 @@ class AutoHKG:
         expected = {"Konteks", "Pertanyaan", "Level Kognitif"}
         if not expected.issubset(set(df.columns)):
             raise ValueError(
-                f"Dataset is missing required columns. "
+                f"Dataset missing required columns. "
                 f"Expected: {expected}. Found: {set(df.columns)}"
             )
 
@@ -259,7 +265,8 @@ class AutoHKG:
             self.checkpoint["failed_ids"] = failed
             self._save_checkpoint()
 
-            time.sleep(self.cfg.sleep_between_batches)
+            if self.cfg.sleep_between_batches > 0:
+                time.sleep(self.cfg.sleep_between_batches)
 
         total = self.checkpoint["processed"]
         log.info(f"Pipeline complete. Total processed: {total} | Failed: {len(failed)}")
@@ -284,13 +291,13 @@ class AutoHKG:
             return len([n for n, d in G.nodes(data=True) if d.get("type") == t])
 
         stats = {
-            "total_nodes"   : G.number_of_nodes(),
-            "total_edges"   : G.number_of_edges(),
-            "topics_coarse" : count_type("topic_coarse"),
-            "topics_fine"   : count_type("topic_fine"),
-            "concepts"      : count_type("concept"),
-            "questions"     : count_type("question"),
-            "methods"       : count_type("method"),
+            "total_nodes":    G.number_of_nodes(),
+            "total_edges":    G.number_of_edges(),
+            "topics_coarse":  count_type("topic_coarse"),
+            "topics_fine":    count_type("topic_fine"),
+            "concepts":       count_type("concept"),
+            "questions":      count_type("question"),
+            "methods":        count_type("method"),
         }
         with open(out / "stats.json", "w") as f:
             json.dump(stats, f, indent=2)
@@ -309,35 +316,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Auto-HKG: Automated Hierarchical Knowledge Graph Constructor"
     )
-    parser.add_argument(
-        "--provider", default="groq",
-        choices=["openai", "groq", "anthropic", "gemini", "ollama", "unsloth"],
-        help="LLM provider to use for knowledge extraction."
-    )
-    parser.add_argument(
-        "--model", default=None,
-        help="Model name or alias. Uses provider default if not specified."
-    )
-    parser.add_argument(
-        "--max-new-tokens", type=int, default=256,
-        help="Maximum tokens to generate per LLM call (default: 256)."
-    )
-    parser.add_argument(
-        "--context-max-chars", type=int, default=500,
-        help="Maximum characters of context passed to prompt (default: 500)."
-    )
-    parser.add_argument(
-        "--data", default="data/Knowledge_Base_Update.csv",
-        help="Path to the semicolon-separated CSV dataset."
-    )
-    parser.add_argument(
-        "--batch-size", type=int, default=10,
-        help="Number of rows per batch (default: 10)."
-    )
-    parser.add_argument(
-        "--sleep", type=float, default=1.0,
-        help="Seconds to sleep between batches (default: 1.0). Set to 0 for local inference."
-    )
+    parser.add_argument("--provider", default="groq")
+    parser.add_argument("--model", default=None)
+    parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--context-max-chars", type=int, default=500)
+    parser.add_argument("--data", default="data/Knowledge_Base_Update.csv")
+    parser.add_argument("--batch-size", type=int, default=10)
+    parser.add_argument("--sleep", type=float, default=0.0)
     args = parser.parse_args()
 
     cfg = HKGConfig(
