@@ -107,66 +107,32 @@ class HKGConfig:
 # ---------------------------------------------------------------------------
 
 EXTRACTION_PROMPT = """\
-You are a knowledge graph extraction system specialized in educational content analysis.
+You are a knowledge graph extraction system for educational content.
+Analyze the exam question below and extract structured information for a hierarchical knowledge graph.
+Return ONLY a valid JSON object — no markdown, no code fences, no extra text.
 
-Your task is to analyze a single exam question along with its reading passage and extract
-structured information that will be used to construct a hierarchical educational knowledge graph.
-The output will be used downstream for adaptive learning and personalized exercise recommendation.
-
-Read the following input carefully before extracting:
-
----
-Context (reading passage):
-{context}
-
-Question:
-{question}
-
-Bloom's Taxonomy Level:
-{bloom_level}
----
-
-Extract the following fields and return ONLY a valid JSON object with no additional text,
-no markdown formatting, no code fences, and no explanation outside the JSON structure.
+Context: {context}
+Question: {question}
+Bloom's Taxonomy Level: {bloom_level}
 
 Required JSON schema:
 {{
-  "topic_coarse": "<Broad subject category. Use 2-4 words. Example: Geographic Location>",
-  "topic_fine":   "<Specific sub-topic within the broad category. Use 3-6 words. Example: Absolute and Relative Location>",
-  "concepts": [
-    "<Primary knowledge concept tested by this question>",
-    "<Additional concept if applicable — include 1 to 4 concepts total>"
-  ],
-  "methods": [
-    "<Problem-solving method or cognitive strategy required to answer this question>",
-    "<Add more methods if multiple strategies are needed — leave as empty list [] if none apply>"
-  ],
+  "topic_coarse": "<Broad subject category, 2-4 words. Example: Geographic Location>",
+  "topic_fine": "<Specific sub-topic, 3-6 words. Example: Absolute and Relative Location>",
+  "concepts": ["<Primary concept tested>", "<Additional concept if any — max 4 total>"],
+  "methods": ["<Cognitive method or strategy required — empty [] if recall only>"],
   "bloom_level": "{bloom_level}",
-  "prerequisites": [
-    "<Knowledge concept that must be understood BEFORE this concept can be learned>",
-    "<Add all logically necessary prerequisite concepts — leave as empty list [] if none>"
-  ],
-  "successors": [
-    "<Knowledge concept that logically follows or builds upon this concept>",
-    "<Add all natural successor concepts — leave as empty list [] if none>"
-  ],
-  "difficulty": <Integer from 1 to 5. Map Bloom level as follows: C1=1, C2=2, C3=3, C4=4, C5=5, C6=5>
+  "prerequisites": ["<Concept needed BEFORE learning this — empty [] if none>"],
+  "successors": ["<Concept that naturally follows this — empty [] if none>"],
+  "difficulty": <1-5, map as: C1=1, C2=2, C3=3, C4=4, C5=5, C6=5>
 }}
 
-Extraction rules:
-1. All string values must be written in Bahasa Indonesia, matching the language of the input.
-2. The 'concepts' list must contain at least one concept and no more than four.
-3. 'topic_coarse' must represent the broadest subject category (e.g., a school subject chapter heading).
-4. 'topic_fine' must represent the most specific sub-topic directly tested by the question.
-5. 'prerequisites' should list concepts that a learner must already know to understand this question.
-   Think of dependencies in the knowledge domain, not just vocabulary. If none exist, use [].
-6. 'successors' should list concepts that are natural next steps after mastering this question's concept.
-   If none exist, use [].
-7. 'methods' should describe the cognitive operation required (e.g., 'membaca tabel', 'menghitung selisih',
-   'membandingkan dua konsep'). If the question only requires recall, you may use [].
-8. Do not include any text, comments, or whitespace outside the JSON object.
-9. Do not wrap the JSON in markdown code fences (no ```json).
-10. Ensure all lists are valid JSON arrays, even if empty ([]).
+Rules:
+- All string values in Bahasa Indonesia.
+- concepts: minimum 1, maximum 4 items.
+- prerequisites and successors represent knowledge dependencies, not just vocabulary.
+- methods: use [] if the question only requires recall.
+- Return JSON only, no explanation outside the object.
 """
 
 
