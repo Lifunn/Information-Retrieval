@@ -13,12 +13,12 @@ flowchart TD
     classDef terminal fill:#E2E8F0,stroke:#475569,stroke-width:2px,color:#0f172a
 
     %% ── PHASE 1 — Offline Indexing ───────────────────────────────
-    subgraph P1["📦  Phase 1 — Offline Processing & Indexing"]
+    subgraph P1["Phase 1 — Offline Processing & Indexing"]
         direction TB
         DS[("Dataset\nKonteks & Pertanyaan")]:::io
-        HKG["⚙️  Auto-HKG Construction\nEkstrak node & edge KG"]:::offline
+        HKG["Auto-HKG Construction\nEkstrak node & edge KG"]:::offline
         KG{{"Knowledge Graph\nNode: Topik › Konsep › Soal\nEdge: prerequisite · peer · successor"}}:::offline
-        IDX["🔍  BM25 Search Index\nInverted index seluruh corpus"]:::offline
+        IDX["BM25 Search Index\nInverted index seluruh corpus"]:::offline
 
         DS --> HKG
         HKG --> KG
@@ -26,13 +26,13 @@ flowchart TD
     end
 
     %% ── PHASE 2-3 — CG-IR Retrieval ─────────────────────────────
-    subgraph P23["🔎  Phase 2 & 3 — CG-IR Question Retrieval"]
+    subgraph P23["Phase 2 & 3 — CG-IR Question Retrieval"]
         direction TB
-        LS(["👤  Learner State\nMastery vector  s_c ∈ [0, 1]"]):::cgir
-        QF["📝  Graph-guided Query Formulation\nPilih node KG + target level Bloom C1–C6"]:::cgir
-        BM["📊  BM25 Retrieval\n+ Hard filter level Bloom"]:::cgir
-        PRF["🔄  Pseudo-Relevance Feedback\nQuery expansion · re-ranking"]:::cgir
-        REC(["✅  1 Soal Terbaik\nSesuai mastery & level kognitif"]):::cgir
+        LS(["Learner State\nMastery vector  s_c ∈ [0, 1]"]):::cgir
+        QF["Graph-guided Query Formulation\nPilih node KG + target level Bloom C1–C6"]:::cgir
+        BM["BM25 Retrieval\n+ Hard filter level Bloom"]:::cgir
+        PRF["Pseudo-Relevance Feedback\nQuery expansion · re-ranking"]:::cgir
+        REC(["1 Soal Terbaik\nSesuai mastery & level kognitif"]):::cgir
 
         LS --> QF
         KG -. "navigasi graph\n(prerequisite / peer / successor)" .-> QF
@@ -43,14 +43,14 @@ flowchart TD
     end
 
     %% ── User interaction ─────────────────────────────────────────
-    ANS[/"✍️  Siswa Menjawab Soal\nteks esai atau jawaban singkat"/]:::io
+    ANS[/"Siswa Menjawab Soal\nteks esai atau jawaban singkat"/]:::io
 
     %% ── PHASE 4 — Hybrid LLM Judge ───────────────────────────────
-    subgraph P4["🤖  Phase 4 — Hybrid LLM Judge"]
+    subgraph P4["Phase 4 — Hybrid LLM Judge"]
         direction TB
-        CTX["📖  Retrieve Context\nAmbil paragraf teori dari baris soal yang sama"]:::judge
-        LLM["💬  LLM Judge Prompting\nInput: soal + jawaban siswa + teori konteks"]:::judge
-        OUT{{"📋  JSON Output\nscore: 0 atau 1\nfeedback: kalimat singkat"}}:::judge
+        CTX["Retrieve Context\nAmbil paragraf teori dari baris soal yang sama"]:::judge
+        LLM["LLM Judge Prompting\nInput: soal + jawaban siswa + teori konteks"]:::judge
+        OUT{{"JSON Output\nscore: 0 atau 1\nfeedback: kalimat singkat"}}:::judge
 
         CTX --> LLM
         LLM --> OUT
@@ -59,10 +59,10 @@ flowchart TD
     DS -. "context retrieval" .-> CTX
 
     %% ── PHASE 5 — BKT & Loop ─────────────────────────────────────
-    subgraph P5["📈  Phase 5 — Dynamic Knowledge Tracing & Exit"]
+    subgraph P5["Phase 5 — Dynamic Knowledge Tracing & Exit"]
         direction TB
         CHK{"Kondisi berhenti?\nscore > 0.9\natau jumlah soal > batas"}:::state
-        BKT["🧠  BKT Update\nHitung ulang mastery s_c\npakai model Bayesian"]:::state
+        BKT["BKT Update\nHitung ulang mastery s_c\npakai model Bayesian"]:::state
         CHK -->|"Belum tercapai"| BKT
     end
 
@@ -79,7 +79,7 @@ flowchart TD
     CHK   -->|"Tercapai"| DONE
 ```
 
-# Auto-HKG 🧠
+# Auto-HKG 
 **Automated Hierarchical Knowledge Graph Constructor**
 
 Implementasi modul Auto-HKG dari paper:
