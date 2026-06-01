@@ -41,38 +41,59 @@ def load_data(graph_path: str, dataset_path: str):
 # ---------------------------------------------------------------------------
 
 def get_question_info(G: nx.DiGraph, q_node_id: str) -> dict:
-    """Ambil topic_coarse, topic_fine, concepts, methods dari graph untuk satu soal."""
+    """Ambil topic_coarse, topic_fine, concepts, methods dari graph untuk satu soal.
+    
+    Traverse path: concept --has_question--> question
+                   topic_fine --has_concept--> concept
+                   topic_coarse --has_subtopic--> topic_fine
+    """
     info = {
-        "topic_coarse" : [],
-        "topic_fine"   : [],
-        "concepts"     : [],
-        "methods"      : [],
+        "topic_coarse" : set(),
+        "topic_fine"   : set(),
+        "concepts"     : set(),
+        "methods"      : set(),
         "bloom_level"  : G.nodes[q_node_id].get("bloom_level", ""),
         "difficulty"   : G.nodes[q_node_id].get("difficulty", ""),
     }
 
-    # Cari node yang punya relasi has_question ke soal ini
+    # Step 1: Ambil langsung dari predecessor has_question
     for pred in G.predecessors(q_node_id):
         pred_data = G.nodes[pred]
         pred_type = pred_data.get("type", "")
         rel       = G.edges[pred, q_node_id].get("relation", "")
+        label     = pred_data.get("label", pred)
 
         if rel == "has_question":
             if pred_type == "topic_coarse":
-                info["topic_coarse"].append(pred_data.get("label", pred))
+                info["topic_coarse"].add(label)
             elif pred_type == "topic_fine":
-                info["topic_fine"].append(pred_data.get("label", pred))
+                info["topic_fine"].add(label)
+                # Traverse naik ke topic_coarse
+                for pred2 in G.predecessors(pred):
+                    if G.nodes[pred2].get("type") == "topic_coarse":
+                        if G.edges[pred2, pred].get("relation") == "has_subtopic":
+                            info["topic_coarse"].add(G.nodes[pred2].get("label", pred2))
             elif pred_type == "concept":
-                info["concepts"].append(pred_data.get("label", pred))
+                info["concepts"].add(label)
+                # Traverse naik ke topic_fine lalu topic_coarse
+                for pred2 in G.predecessors(pred):
+                    pred2_type = G.nodes[pred2].get("type", "")
+                    rel2       = G.edges[pred2, pred].get("relation", "")
+                    if pred2_type == "topic_fine" and rel2 == "has_concept":
+                        info["topic_fine"].add(G.nodes[pred2].get("label", pred2))
+                        for pred3 in G.predecessors(pred2):
+                            if G.nodes[pred3].get("type") == "topic_coarse":
+                                if G.edges[pred3, pred2].get("relation") == "has_subtopic":
+                                    info["topic_coarse"].add(G.nodes[pred3].get("label", pred3))
 
-    # Cari method dari soal ini
+    # Step 2: Methods dari successor
     for succ in G.successors(q_node_id):
-        succ_data = G.nodes[succ]
-        rel       = G.edges[q_node_id, succ].get("relation", "")
+        rel = G.edges[q_node_id, succ].get("relation", "")
         if rel == "requires_method":
-            info["methods"].append(succ_data.get("label", succ))
+            info["methods"].add(G.nodes[succ].get("label", succ))
 
-    return info
+    # Convert sets to lists
+    return {k: list(v) if isinstance(v, set) else v for k, v in info.items()}
 
 
 # ---------------------------------------------------------------------------
