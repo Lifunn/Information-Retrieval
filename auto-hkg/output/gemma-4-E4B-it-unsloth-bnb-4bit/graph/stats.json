@@ -1,0 +1,9 @@
+{
+  "total_nodes": 7413,
+  "total_edges": 28488,
+  "topics_coarse": 262,
+  "topics_fine": 983,
+  "concepts": 4660,
+  "questions": 1200,
+  "methods": 308
+}
