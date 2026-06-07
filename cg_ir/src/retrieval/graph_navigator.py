@@ -14,14 +14,14 @@ def mastery_to_bloom(mastery: float) -> int:
 @dataclass
 class QueryContext:
     keyword: str
-    query_terms: List[str]              = field(default_factory=list)
-    target_bloom: int                   = 1
-    bloom_filter: List[int]             = field(default_factory=list)
-    candidate_topics: List[str]         = field(default_factory=list)
-    candidate_concepts: List[str]       = field(default_factory=list)
-    candidate_question_ids: List[str]   = field(default_factory=list)
-    traversal_path: List[str]           = field(default_factory=list)
-    graph_used: bool                    = False
+    query_terms: List[str]            = field(default_factory=list)
+    target_bloom: int                 = 1
+    bloom_filter: List[int]           = field(default_factory=list)
+    candidate_topics: List[str]       = field(default_factory=list)
+    candidate_concepts: List[str]     = field(default_factory=list)
+    candidate_question_ids: List[str] = field(default_factory=list)
+    traversal_path: List[str]         = field(default_factory=list)
+    graph_used: bool                  = False
 
     @property
     def expanded_query(self) -> str:
@@ -38,14 +38,11 @@ class GraphNavigator:
             self._by_type.setdefault(t, []).append(nid)
 
     def _match_nodes(self, keyword: str, top_k: int = 5) -> List[Tuple[str, float]]:
-        kw       = keyword.lower().strip()
-        kw_parts = set(kw.split())
+        kw         = keyword.lower().strip()
+        kw_parts   = set(kw.split())
         type_boost = {
-            "topic_coarse": 0.4,
-            "topic_fine":   0.3,
-            "concept":      0.2,
-            "question":     0.1,
-            "method":       0.0,
+            "topic_coarse": 0.4, "topic_fine": 0.3,
+            "concept": 0.2, "question": 0.1, "method": 0.0,
         }
         results = []
         for nid, attrs in self.graph.nodes(data=True):
@@ -65,11 +62,21 @@ class GraphNavigator:
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:top_k]
 
+    def _collect_questions(self, node_id: str, question_ids: Set[str]):
+        """Kumpulkan semua question IDs dari has_question edges node ini."""
+        for _, neighbor, data in self.graph.out_edges(node_id, data=True):
+            if data.get("relation") == "has_question":
+                question_ids.add(neighbor)
+
     def _traverse(self, start_ids: List[str], mastery: float):
         visited      = set(start_ids)
         question_ids: Set[str] = set()
         frontier     = list(start_ids)
         path         = [f"start:{nid}" for nid in start_ids]
+
+        # Kumpulkan questions dari start nodes langsung
+        for nid in start_ids:
+            self._collect_questions(nid, question_ids)
 
         CONTEXT_EDGES = {"has_subtopic", "has_concept", "peer"}
 
@@ -79,7 +86,6 @@ class GraphNavigator:
 
                 if relation == "has_question":
                     question_ids.add(neighbor)
-                    path.append(f"has_question:{neighbor}")
                     continue
 
                 if neighbor in visited:
@@ -91,15 +97,24 @@ class GraphNavigator:
                 elif relation == "successor" and mastery >= 0.5:
                     include = True
                 elif relation == "prerequisite" and mastery < 0.5:
+                    # Mastery rendah: agresif traversal ke prerequisite
+                    # untuk dapat soal yang lebih mudah
                     include = True
 
                 if include:
                     visited.add(neighbor)
                     frontier.append(neighbor)
                     path.append(f"{relation}:{neighbor}")
-                    for _, q_neighbor, q_data in self.graph.out_edges(neighbor, data=True):
-                        if q_data.get("relation") == "has_question":
-                            question_ids.add(q_neighbor)
+                    self._collect_questions(neighbor, question_ids)
+
+                    # Jika mastery sangat rendah, ikuti satu hop lagi
+                    # ke prerequisite supaya candidate pool lebih besar
+                    if relation == "prerequisite" and mastery < 0.3:
+                        for _, deep_neighbor, deep_data in self.graph.out_edges(neighbor, data=True):
+                            if deep_data.get("relation") == "prerequisite" and deep_neighbor not in visited:
+                                visited.add(deep_neighbor)
+                                path.append(f"prerequisite(deep):{deep_neighbor}")
+                                self._collect_questions(deep_neighbor, question_ids)
 
         return visited, question_ids, path
 
