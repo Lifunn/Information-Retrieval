@@ -1,113 +1,263 @@
-## ⚙️ System Pipeline Architecture (CG-IR & Hybrid LLM Judge)
+# CG-IR Adaptive Quiz System
 
-Karena dataset bank soal tidak memiliki kunci jawaban, sistem menggunakan pendekatan **Hybrid Context-Retrieval LLM Judge**. Sistem akan mencari materi teori yang relevan secara real-time untuk dijadikan "buku panduan" bagi LLM saat mengoreksi jawaban siswa.
+**Context-Guided Information Retrieval: Knowledge Graph + FAISS Dense Retrieval**
+
+Final Project — Mata Kuliah Information Retrieval
+
+---
+
+## Overview
+
+Sistem adaptive quiz yang secara otomatis menyesuaikan soal berdasarkan tingkat penguasaan (mastery) siswa. Sistem menggunakan **CG-IR** (Context-Guided Information Retrieval) yang menggabungkan Knowledge Graph sebagai navigator topik dengan FAISS sebagai semantic search engine.
+
+Karena dataset tidak memiliki kunci jawaban, sistem menggunakan **Hybrid Context-Retrieval LLM Judge** — LLM menilai jawaban siswa menggunakan konteks teori dari dataset sebagai referensi.
+
+---
+
+## System Pipeline
 
 ```mermaid
 flowchart TD
-    %% ── Node styles ──────────────────────────────────────────────
     classDef offline  fill:#DBEAFE,stroke:#1D4ED8,stroke-width:1.5px,color:#1e3a5f,rx:8
     classDef cgir     fill:#DCFCE7,stroke:#15803D,stroke-width:1.5px,color:#14532d,rx:8
     classDef judge    fill:#FEF9C3,stroke:#CA8A04,stroke-width:1.5px,color:#713f12,rx:8
     classDef state    fill:#F3E8FF,stroke:#7E22CE,stroke-width:1.5px,color:#3b0764,rx:8
     classDef io       fill:#F1F5F9,stroke:#64748B,stroke-width:2px,color:#0f172a,rx:8
     classDef terminal fill:#E2E8F0,stroke:#475569,stroke-width:2px,color:#0f172a
-
-    %% ── PHASE 1 — Offline Indexing ───────────────────────────────
-    subgraph P1["Phase 1 — Offline Processing & Indexing"]
+ 
+    subgraph P1["Phase 1 — Offline Indexing"]
         direction TB
-        DS[("Dataset\nKonteks & Pertanyaan")]:::io
-        HKG["Auto-HKG Construction\nEkstrak node & edge KG"]:::offline
-        KG{{"Knowledge Graph\nNode: Topik › Konsep › Soal\nEdge: prerequisite · peer · successor"}}:::offline
-        IDX["BM25 Search Index\nInverted index seluruh corpus"]:::offline
-
+        DS[("Dataset CSV")]:::io
+        HKG["Auto-HKG\nLLM ekstrak node & edge"]:::offline
+        KG{{"Knowledge Graph\n7703 nodes · 29922 edges"}}:::offline
+        IDX["FAISS Index\n1200 soal → vector 384 dim"]:::offline
+ 
         DS --> HKG
         HKG --> KG
         DS --> IDX
     end
-
-    %% ── PHASE 2-3 — CG-IR Retrieval ─────────────────────────────
-    subgraph P23["Phase 2 & 3 — CG-IR Question Retrieval"]
+ 
+    subgraph P23["Phase 2 & 3 — CG-IR Retrieval"]
         direction TB
-        LS(["Learner State\nMastery vector  s_c ∈ [0, 1]"]):::cgir
-        QF["Graph-guided Query Formulation\nPilih node KG + target level Bloom C1–C6"]:::cgir
-        BM["BM25 Retrieval\n+ Hard filter level Bloom"]:::cgir
-        PRF["Pseudo-Relevance Feedback\nQuery expansion · re-ranking"]:::cgir
-        REC(["1 Soal Terbaik\nSesuai mastery & level kognitif"]):::cgir
-
+        LS(["Learner State\nP(L) ∈ [0, 1]"]):::cgir
+        QF["Graph Navigator\nTraversal → enriched query\nCandidate pool · Target Bloom"]:::cgir
+        FM["FAISS Search\nCosine similarity\ndalam candidate pool"]:::cgir
+        REC(["1 Soal Terbaik"]):::cgir
+ 
         LS --> QF
-        KG -. "navigasi graph\n(prerequisite / peer / successor)" .-> QF
-        QF --> BM
-        IDX -. "kandidat soal" .-> BM
-        BM --> PRF
-        PRF --> REC
+        KG -. "traversal graph" .-> QF
+        QF --> FM
+        IDX -. "semantic search" .-> FM
+        FM --> REC
     end
-
-    %% ── User interaction ─────────────────────────────────────────
-    ANS[/"Siswa Menjawab Soal\nteks esai atau jawaban singkat"/]:::io
-
-    %% ── PHASE 4 — Hybrid LLM Judge ───────────────────────────────
-    subgraph P4["Phase 4 — Hybrid LLM Judge"]
+ 
+    ANS[/"Jawaban Siswa"/]:::io
+ 
+    subgraph P4["Phase 4 — LLM Judge"]
         direction TB
-        CTX["Retrieve Context\nAmbil paragraf teori dari baris soal yang sama"]:::judge
-        LLM["LLM Judge Prompting\nInput: soal + jawaban siswa + teori konteks"]:::judge
-        OUT{{"JSON Output\nscore: 0 atau 1\nfeedback: kalimat singkat"}}:::judge
-
+        CTX["Ambil Konteks\ndari dataset"]:::judge
+        LLM["Groq LLM\nsoal + jawaban + konteks"]:::judge
+        OUT{{"score: 0 / 1\nfeedback"}}:::judge
+ 
         CTX --> LLM
         LLM --> OUT
     end
-
-    DS -. "context retrieval" .-> CTX
-
-    %% ── PHASE 5 — BKT & Loop ─────────────────────────────────────
-    subgraph P5["Phase 5 — Dynamic Knowledge Tracing & Exit"]
+ 
+    DS -. "konteks" .-> CTX
+ 
+    subgraph P5["Phase 5 — BKT & Loop"]
         direction TB
-        CHK{"Kondisi berhenti?\nscore > 0.9\natau jumlah soal > batas"}:::state
-        BKT["BKT Update\nHitung ulang mastery s_c\npakai model Bayesian"]:::state
-        CHK -->|"Belum tercapai"| BKT
+        CHK{"Berhenti?\nP(L) ≥ 0.9 · maks soal · selesai"}:::state
+        BKT["BKT Update\nP(L_next) = P(L|obs) + (1-P(L|obs))·P(T)"]:::state
+        CHK -->|"Belum"| BKT
     end
-
-    %% ── Entry & exit ─────────────────────────────────────────────
-    START(["▶  Mulai\nSiswa pilih topik"]):::terminal
-    DONE(["⏹  Selesai\nSesi berakhir / lulus"]):::terminal
-
-    %% ── Main flow ────────────────────────────────────────────────
+ 
+    START(["Mulai — input keyword"]):::terminal
+    DONE(["Selesai — mastery tercapai"]):::terminal
+ 
     START --> LS
     REC   --> ANS
     ANS   --> CTX
     OUT   --> CHK
-    BKT   -->|"Update state s_c"| LS
+    BKT   -->|"Update P(L)"| LS
     CHK   -->|"Tercapai"| DONE
 ```
+---
 
-# Auto-HKG 
-**Automated Hierarchical Knowledge Graph Constructor**
+## Cara Kerja CG-IR
 
-Implementasi modul Auto-HKG dari paper:
-> *"Beyond Static Question Banks: Dynamic Knowledge Expansion via LLM-Automated Graph Construction and Adaptive Generation"* (Wang et al., 2026)
+### Masalah yang Diselesaikan
 
-Diadaptasi untuk dataset Geografi/IPS SMA dengan pipeline **CG-IR** (pengganti RAG) untuk final project mata kuliah **Information Retrieval**.
+Sistem retrieval biasa (FAISS tanpa graph) mencari soal dari seluruh corpus berdasarkan kemiripan semantik saja, tanpa mempertimbangkan:
+- Apakah topik soal sesuai dengan yang diminta user
+- Apakah level kognitif soal sesuai dengan mastery user saat ini
+
+CG-IR menyelesaikan ini dengan dua kontribusi graph:
+
+### Kontribusi 1 — Query Enrichment
+
+Ketika user mengetik keyword `"pancasila"`, GraphNavigator menelusuri graph dan mengumpulkan label semua node yang terhubung:
+
+```
+Keyword: "pancasila"
+
+Node yang ditemukan:
+  topic_coarse : "Pancasila dan Kebijakan"
+  topic_fine   : "Nilai-nilai Pancasila"
+  concept      : "Sila Pertama"
+  concept      : "Ideologi Negara"
+
+Enriched query:
+  "pancasila Pancasila dan Kebijakan Nilai-nilai Pancasila Sila Pertama Ideologi Negara"
+```
+
+Query yang diperkaya ini di-encode oleh sentence-transformer menjadi vector yang merepresentasikan konteks topik lebih kaya, sehingga FAISS lebih mudah menemukan soal yang benar-benar relevan.
+
+### Kontribusi 2 — Candidate Pool
+
+GraphNavigator mengumpulkan question node IDs yang terhubung ke topik via edge `has_question`. FAISS kemudian hanya mencari di dalam pool tersebut:
+
+```
+Tanpa graph: FAISS search di 1200 soal → bisa dapat soal apapun
+Dengan graph: FAISS search di ~15 soal terkait "pancasila" → lebih terfokus
+```
+
+### Adaptive Traversal
+
+Arah traversal graph menyesuaikan mastery:
+
+```
+mastery rendah (< 0.5) → ikuti prerequisite edges → soal lebih mudah
+mastery sedang         → ikuti peer edges → soal setara
+mastery tinggi (>= 0.5) → ikuti successor edges → soal lebih sulit
+```
 
 ---
 
-## Struktur Proyek
+## Komponen Sistem
+
+### Knowledge Graph (Auto-HKG)
+
+Dibangun secara otomatis dari dataset menggunakan LLM. Graph berisi:
+
+| Node Type | Contoh | Jumlah |
+|---|---|---|
+| topic_coarse | "Pelestarian Lingkungan" | 367 |
+| topic_fine | "Pelestarian Sumber Daya Air" | 1070 |
+| concept | "Siklus Hidrologi" | 5005 |
+| question | "Jelaskan proses siklus hidrologi!" | 1200 |
+| method | "C4-Menganalisis" | 61 |
+
+| Edge Type | Arah | Fungsi |
+|---|---|---|
+| has_subtopic | topic_coarse → topic_fine | Hierarki topik |
+| has_concept | topic_fine → concept | Hierarki konsep |
+| has_question | topic/concept → question | Menghasilkan candidate pool |
+| prerequisite | topic → topic | Navigasi ke topik lebih mudah |
+| peer | topic → topic | Navigasi ke topik setara |
+| successor | topic → topic | Navigasi ke topik lebih sulit |
+| requires_method | question → method | Metadata Bloom (tidak dipakai retrieval) |
+
+### FAISS Dense Retrieval
+
+Model: `paraphrase-multilingual-MiniLM-L12-v2`
+- Mendukung Bahasa Indonesia
+- Dimensi vector: 384
+- Ukuran model: ~120MB
+- Tidak butuh GPU
+
+Setiap soal di-encode menjadi vector yang merepresentasikan makna semantiknya. Pencarian dilakukan dengan cosine similarity.
+
+### Bayesian Knowledge Tracing (BKT)
+
+Melacak mastery user per konsep menggunakan model probabilistik:
 
 ```
-auto-hkg/
+P(L_next) = P(L|obs) + (1 - P(L|obs)) × P(T)
+
+Parameter:
+  p_init    = 0.10   prior mastery sebelum mulai
+  p_transit = 0.05   kemungkinan belajar dari satu soal
+  p_slip    = 0.15   kemungkinan tahu tapi jawab salah
+  p_guess   = 0.25   kemungkinan tidak tahu tapi jawab benar
+```
+
+### LLM Judge
+
+Model: `llama-3.3-70b-versatile` via Groq API (free tier)
+
+Input: soal + jawaban user + konteks teori dari dataset
+Output: `{"score": 0|1, "feedback": "kalimat penjelasan"}`
+
+---
+
+## Project Structure
+
+```
+cg_ir/
 ├── src/
-│   ├── auto_hkg.py          # pipeline utama
-│   ├── llm_client.py        # abstraksi provider LLM
-│   ├── schema_validator.py  # validasi output JSON
-│   ├── graph_builder.py     # perakitan graph (NetworkX)
-│   └── visualize_graph.py   # visualisasi PNG & HTML
-├── data/
-│   └── Knowledge_Base_Update.csv
-├── output/
-│   ├── graph/               # hasil: .json, .csv, .png, .html
-│   └── logs/                # checkpoint & log
+│   ├── data_loader.py           # Load CSV + graph, link corpus ke graph
+│   ├── retrieval/
+│   │   ├── __init__.py
+│   │   ├── faiss_index.py       # FAISS dense retrieval index
+│   │   ├── graph_navigator.py   # KG traversal + query formulation
+│   │   └── cgir_pipeline.py     # Pipeline utama + FAISSBaseline
+│   ├── tracing/
+│   │   ├── __init__.py
+│   │   └── bkt.py               # Bayesian Knowledge Tracing
+│   ├── judge/
+│   │   ├── __init__.py
+│   │   └── llm_judge.py         # LLM answer judge + relevance judge
+│   └── evaluation/
+│       ├── __init__.py
+│       ├── metrics.py           # P@k, R@k, NDCG@k, MRR, MAP, Bloom accuracy
+│       └── benchmark.py         # CG-IR vs FAISS baseline comparison
 ├── notebooks/
-│   └── Auto_HKG_Colab.ipynb
+│   └── CG_IR_Pipeline.ipynb
 ├── requirements.txt
 └── README.md
 ```
+---
 
+## Evaluation Metrics
 
+| Metrik | Keterangan | Butuh Ground Truth |
+|---|---|---|
+| P@k | Precision at k | Ya |
+| R@k | Recall at k | Ya |
+| NDCG@k | Normalized Discounted Cumulative Gain | Ya (graded) |
+| MRR | Mean Reciprocal Rank | Ya |
+| MAP | Mean Average Precision | Ya |
+| Bloom Accuracy | % soal dengan Bloom level tepat | Tidak |
+| Bloom MAE | Rata-rata selisih Bloom level | Tidak |
+| Latency | Waktu retrieval per query (mean + P95) | Tidak |
+
+Relevance judgments dibuat menggunakan LLM judge (Groq) dengan skala 0–3, dijalankan sekali dan disimpan ke JSON untuk reuse.
+
+---
+
+## Hasil Evaluasi
+
+| Metrik | FAISS Baseline | CG-IR (Graph + FAISS) |
+|---|---|---|
+| Bloom Accuracy | 28.6% | 57.1% |
+| Bloom MAE | 0.714 | 0.429 |
+| Graph Coverage | 0% | 100% |
+
+CG-IR mengungguli FAISS baseline secara signifikan pada Bloom accuracy — metrik yang paling relevan untuk sistem adaptive learning karena mengukur ketepatan level kognitif soal terhadap mastery user. FAISS baseline unggul pada pure relevance metrics (P@k, NDCG@k) karena bebas mencari di seluruh corpus tanpa pembatasan candidate pool dari graph.
+
+---
+
+## Dependencies
+
+```
+faiss-cpu>=1.7.4
+sentence-transformers>=2.6.0
+networkx>=3.2
+numpy>=1.24
+pandas>=2.0
+tqdm>=4.65
+groq>=0.11.0
+matplotlib>=3.7
+tabulate>=0.9.0
+```
