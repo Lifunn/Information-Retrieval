@@ -63,20 +63,6 @@ cgir-adaptive-quiz/
 
 ---
 
-## Cara Pakai di Google Colab
-
-1. Clone repo:
-   ```python
-   !git clone https://github.com/YOUR_USERNAME/cgir-adaptive-quiz.git
-   %cd cgir-adaptive-quiz
-   !pip install -r requirements.txt
-   ```
-
-2. Salin isi `notebooks/CG_IR_Pipeline.py` ke Colab dan jalankan per section.
-
-3. Set path dataset & API key di Section 1.
-
----
 
 ## Evaluation Metrics
 
