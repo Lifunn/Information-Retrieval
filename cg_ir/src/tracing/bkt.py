@@ -22,9 +22,9 @@ from typing import Dict, List, Optional
 class BKTParams:
     """BKT parameter set untuk satu concept/skill."""
     p_init:    float = 0.10   # P(L₀): prior mastery
-    p_transit: float = 0.30   # P(T): learning rate
-    p_slip:    float = 0.10   # P(S): slip probability
-    p_guess:   float = 0.20   # P(G): guess probability
+    p_transit: float = 0.05   # P(T): learning rate
+    p_slip:    float = 0.20   # P(S): slip probability
+    p_guess:   float = 0.10   # P(G): guess probability
 
 
 @dataclass
