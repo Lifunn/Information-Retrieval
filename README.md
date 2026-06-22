@@ -16,6 +16,7 @@ Karena dataset tidak memiliki kunci jawaban, sistem menggunakan **Hybrid Context
 
 ## System Pipeline
 
+
 ```mermaid
 flowchart TD
     classDef offline  fill:#DBEAFE,stroke:#1D4ED8,stroke-width:1.5px,color:#1e3a5f,rx:8
@@ -24,57 +25,60 @@ flowchart TD
     classDef state    fill:#F3E8FF,stroke:#7E22CE,stroke-width:1.5px,color:#3b0764,rx:8
     classDef io       fill:#F1F5F9,stroke:#64748B,stroke-width:2px,color:#0f172a,rx:8
     classDef terminal fill:#E2E8F0,stroke:#475569,stroke-width:2px,color:#0f172a
- 
+
     subgraph P1["Phase 1 — Offline Indexing"]
         direction TB
         DS[("Dataset CSV")]:::io
         HKG["Auto-HKG\nLLM ekstrak node & edge"]:::offline
         KG{{"Knowledge Graph\n7703 nodes · 29922 edges"}}:::offline
+        LINK["link_corpus_to_graph\n+ enrich_with_graph_topics"]:::offline
         IDX["FAISS Index\n1200 soal → vector 384 dim"]:::offline
- 
+
         DS --> HKG
         HKG --> KG
-        DS --> IDX
+        DS --> LINK
+        KG --> LINK
+        LINK --> IDX
     end
- 
+
     subgraph P23["Phase 2 & 3 — CG-IR Retrieval"]
         direction TB
         LS(["Learner State\nP(L) ∈ [0, 1]"]):::cgir
         QF["Graph Navigator\nTraversal → enriched query\nCandidate pool · Target Bloom"]:::cgir
         FM["FAISS Search\nCosine similarity\ndalam candidate pool"]:::cgir
         REC(["1 Soal Terbaik"]):::cgir
- 
+
         LS --> QF
         KG -. "traversal graph" .-> QF
         QF --> FM
         IDX -. "semantic search" .-> FM
         FM --> REC
     end
- 
+
     ANS[/"Jawaban Siswa"/]:::io
- 
+
     subgraph P4["Phase 4 — LLM Judge"]
         direction TB
         CTX["Ambil Konteks\ndari dataset"]:::judge
         LLM["Groq LLM\nsoal + jawaban + konteks"]:::judge
-        OUT{{"score: 0 / 1\nfeedback"}}:::judge
- 
+        OUT{{"score: 0.0–1.0\nfeedback"}}:::judge
+
         CTX --> LLM
         LLM --> OUT
     end
- 
+
     DS -. "konteks" .-> CTX
- 
-    subgraph P5["Phase 5 — BKT & Loop"]
+
+    subgraph P5["Phase 5 — Weighted BKT & Loop"]
         direction TB
-        CHK{"Berhenti?\nP(L) ≥ 0.9 · maks soal · selesai"}:::state
-        BKT["BKT Update\nP(L_next) = P(L|obs) + (1-P(L|obs))·P(T)"]:::state
+        CHK{"Berhenti?\n15 soal selesai"}:::state
+        BKT["Weighted BKT Update\nP(L_next) = score × P_correct\n+ (1−score) × P_wrong"]:::state
         CHK -->|"Belum"| BKT
     end
- 
+
     START(["Mulai — input keyword"]):::terminal
-    DONE(["Selesai — mastery tercapai"]):::terminal
- 
+    DONE(["Selesai — 15 soal tercapai"]):::terminal
+
     START --> LS
     REC   --> ANS
     ANS   --> CTX
